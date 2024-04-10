@@ -1,0 +1,106 @@
+---
+title: "Our own experiment for experimentation in psychology, linguistics and AI"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This notebook contains the data analysis for our experiment; namely, how different levels of anthropormism in artificial agents affect mind perception across three established dimensions by Malle (2019): Reality Interaction (R), Moral and Social Cognition (M), and Affect (A). 
+
+# Load the necessary packages 
+```{r}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(tidyverse)
+library(ordinal)
+```
+
+# Load the participants' responses 
+```{r}
+responses <- read_csv('survey_responses.csv', show_col_types = FALSE)
+responses <- responses %>% select(-c(1:17))
+# specify column names using the second row of the data
+colnames(responses) <- unlist(responses[1, ])
+
+# remove the second row, which was used for column names
+responses <- responses[-1, ]
+
+# delete first row (metadata)
+responses <- responses[-1, ]
+
+# replace string responses with numeric values
+cleaned_responses <- responses
+
+# convert string responses to numeric ones
+cleaned_responses[cleaned_responses == "Not at all capable  0"] <- "0"
+cleaned_responses[cleaned_responses == "Completely capable 7"] <- "7"
+# convert all columns from the 4th onwards to numeric 
+cleaned_responses[, 4:ncol(cleaned_responses)] <- lapply(cleaned_responses[, 4:ncol(cleaned_responses)], as.numeric)
+```
+# Convert the responses to a long format 
+```{r}
+# create a vector of question descriptions from the 4th to the 24th column names
+question_descriptions <- names(cleaned_responses)[4:24] %>%
+  str_extract(pattern = "(?<=- ).*$")
+
+long_responses <- cleaned_responses %>%
+  mutate(participant_id = row_number()) %>% # assign a unique identifier to participants
+  pivot_longer(
+    cols = 4:ncol(cleaned_responses), # select all columns from the 4th to the last (these are the questions)
+    names_to = "question_index",
+    values_to = "score"
+  ) %>%
+  group_by(participant_id) %>%
+  mutate(
+    # calculate question index based on the position of the column, not the name
+    all_questions_index = row_number(),
+    # determine the agent type
+    agent_type = case_when(
+      all_questions_index <= 20 ~ "low level",
+      all_questions_index <= 40 ~ "mid level",
+      all_questions_index <= 60 ~ "high level",
+      all_questions_index <= 80 ~ "human"
+    ),
+    # adjust the dimension calculation based on the actual question index
+     question_index = (all_questions_index - 1) %% 20 + 1, # cycle through 1-20 for each agent type
+      dimension = case_when(
+        question_index >= 1 & question_index <= 8 ~ "A",
+        question_index > 8 & question_index <= 16 ~ "M",
+        question_index > 16 ~ "R"
+      ), 
+      description = question_descriptions[question_index]
+  )
+
+```
+
+# Create the ordinal mixed-effects model 
+```{r}
+# ordinal model 
+long_responses$agent_type <- as.factor(long_responses$agent_type)
+long_responses$agent_type <- relevel(long_responses$agent_type, ref = "human")
+model <- clmm(as.factor(score) ~ agent_type * dimension + (1 + dimension|participant_id), data = long_responses)
+
+```
+```{r}
+summary(model)
+```
+# Model comparison with ANOVA 
+```{r}
+non_human_responses <- long_responses[long_responses$agent_type != 'human', ]
+model2 <- clmm(as.factor(score) ~ agent_type * dimension + (1 + dimension|participant_id), data = non_human_responses)
+simple_model <- clmm(as.factor(score) ~ dimension + (1 + dimension| participant_id), data = non_human_responses)
+anova(model2, simple_model)
+```
+# Descriptive summary of participants' responses
+```{r}
+# calculate the average score of each agent_type per dimension
+average_scores <- non_human_responses %>%
+  group_by(agent_type, dimension) %>%
+  summarize(average_score = mean(score, na.rm = TRUE))
+
+print(average_scores)
+```
+
